@@ -1,9 +1,8 @@
-# fileshare_client.py
 import os
 import socket
 
 # Configuration defaults
-PEER_HOST = "127.0.0.1"  # Change if peer is on a different machine
+PEER_HOST = "127.0.0.1"
 PEER_PORT = 5000
 
 

@@ -1,4 +1,3 @@
-# fileshare_peer.py
 import os
 import socket
 import threading
