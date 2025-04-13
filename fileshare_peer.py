@@ -1,11 +1,27 @@
 import os
 import socket
 import threading
+import json
 
 # Configuration
 HOST = '0.0.0.0'
 PORT = 5000
 SHARED_DIR = "shared_files"
+
+# File to store user data
+USERS_FILE = "users.json"  
+
+def load_users():
+    """Load user data from JSON file. Returns a dictionary."""
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    return {} 
+
+def save_users(users):
+    """Save user data to JSON file."""
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=4)  
 
 # Ensure the shared files directory exists
 if not os.path.exists(SHARED_DIR):
