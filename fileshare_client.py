@@ -5,7 +5,31 @@ import socket
 PEER_HOST = "127.0.0.1"
 PEER_PORT = 5000
 
+def register_user():
+    username = input("Enter username: ").strip()
+    password = input("Enter password: ").strip()
 
+    try:
+        conn = send_command("REGISTER")
+        
+        # Wait for acknowledgement
+        ack = conn.recv(1024).decode().strip()
+        if ack != "REGISTER_ACK":
+            print("Registration protocol error")
+            return
+            
+        # Send credentials
+        conn.sendall(f"{username}\n{password}\n".encode())
+        
+        # Get final response
+        response = conn.recv(1024).decode().strip()
+        print(response)
+    except Exception as e:
+        print(f"Registration failed: {e}")
+    finally:
+        conn.close()
+        
+        
 def send_command(command, extra_data=None):
     """
     Connect to the peer, send a command, and optionally extra data.
@@ -117,11 +141,12 @@ def download_file():
 
 def main():
     while True:
-        print("\nCipherShare Client - Phase 1")
+        print("\nCipherShare Client - Phase 2")
         print("1. List shared files")
         print("2. Upload a file")
         print("3. Download a file")
-        print("4. Exit")
+        print("4. Register new user")
+        print("5. Exit")
         choice = input("Enter your choice: ").strip()
 
         if choice == "1":
@@ -131,10 +156,12 @@ def main():
         elif choice == "3":
             download_file()
         elif choice == "4":
+            register_user()  
+        elif choice == "5":
             print("Exiting.")
             break
         else:
-            print("Invalid choice. Please try again.")
+            print("Invalid choice. Try again.")
 
 
 # Configuration step at module level

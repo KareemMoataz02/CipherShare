@@ -2,6 +2,7 @@ import os
 import socket
 import threading
 import json
+import crypto_utils 
 
 # Configuration
 HOST = '0.0.0.0'
@@ -22,6 +23,36 @@ def save_users(users):
     """Save user data to JSON file."""
     with open(USERS_FILE, "w") as f:
         json.dump(users, f, indent=4)  
+        
+        
+def handle_register(conn):
+    try:
+       
+        conn.sendall("READY\n".encode())
+        
+        # Receive username and password in one go
+        data = conn.recv(1024).decode().strip().split('\n')
+        if len(data) < 2:
+            conn.sendall("ERROR: Need username and password\n".encode())
+            return
+            
+        username = data[0]
+        password = data[1]
+
+        users = load_users()
+        if username in users:
+            conn.sendall("ERROR: Username exists\n".encode())
+            return
+
+        hashed_password, salt = crypto_utils.hash_password(password)
+        users[username] = {"hashed_password": hashed_password, "salt": salt}
+        save_users(users)
+        conn.sendall("REGISTER_SUCCESS\n".encode())
+
+    except Exception as e:
+        conn.sendall(f"REGISTER_ERROR: {e}\n".encode())
+        
+
 
 # Ensure the shared files directory exists
 if not os.path.exists(SHARED_DIR):
@@ -111,28 +142,77 @@ def handle_list(conn):
     except Exception as e:
         conn.sendall(f"LIST ERROR: {e}\n".encode())
 
-
 def handle_client_connection(conn, addr):
     print(f"Accepted connection from {addr}")
     try:
-        # Receive command (UPLOAD, DOWNLOAD, LIST)
-        data = conn.recv(1024).decode().strip()
-        if not data:
+        
+        command = conn.recv(1024).decode().strip().upper()
+        if not command:
+            print(f"Client {addr} disconnected without sending command")
             return
-        command = data.upper()
-        if command == "UPLOAD":
+            
+        print(f"Processing command: {command} from {addr}")
+
+        if command == "REGISTER":
+            # Send acknowledgement
+            conn.sendall("REGISTER_ACK\n".encode())
+            
+            # Receive credentials (username\npassword)
+            creds = conn.recv(1024).decode().strip().split('\n')
+            if len(creds) != 2:
+                conn.sendall("ERROR: Invalid format. Expected username\\npassword\n".encode())
+                return
+                
+            username, password = creds[0], creds[1]
+            print(f"Registration attempt for user: {username}")
+            
+            # Process registration
+            users = load_users()
+            if username in users:
+                conn.sendall("ERROR: Username already exists\n".encode())
+            else:
+                try:
+                    hashed_pw, salt = crypto_utils.hash_password(password)
+                    users[username] = {
+                        'hashed_password': hashed_pw.hex(),
+                        'salt': salt.hex()
+                    }
+                    save_users(users)
+                    conn.sendall("REGISTER_SUCCESS\n".encode())
+                    print(f"Registered new user: {username}")
+                except Exception as e:
+                    conn.sendall(f"ERROR: Registration failed ({str(e)})\n".encode())
+                    print(f"Registration error for {username}: {e}")
+
+        elif command == "UPLOAD":
             handle_upload(conn)
+            
         elif command == "DOWNLOAD":
             handle_download(conn)
+            
         elif command == "LIST":
             handle_list(conn)
+            
         else:
             conn.sendall("ERROR: Unknown command\n".encode())
-    except Exception as e:
-        print(f"Error handling client {addr}: {e}")
-    finally:
-        conn.close()
+            print(f"Unknown command from {addr}: {command}")
 
+    except ConnectionResetError:
+        print(f"Client {addr} disconnected abruptly")
+    except Exception as e:
+        print(f"Error handling client {addr}: {str(e)}")
+        try:
+            conn.sendall(f"ERROR: {str(e)}\n".encode())
+        except:
+            pass
+    finally:
+        try:
+            conn.close()
+            print(f"Closed connection for {addr}")
+        except:
+            pass
+        
+        
 
 def start_peer():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
