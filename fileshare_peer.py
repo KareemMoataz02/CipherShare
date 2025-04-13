@@ -52,6 +52,39 @@ def handle_register(conn):
     except Exception as e:
         conn.sendall(f"REGISTER_ERROR: {e}\n".encode())
         
+def handle_login(conn):
+    try:
+        conn.sendall("LOGIN_READY\n".encode())  # Acknowledge command
+        
+        # Receive credentials (username\npassword)
+        creds = conn.recv(1024).decode().strip().split('\n')
+        if len(creds) != 2:
+            conn.sendall("ERROR: Invalid format\n".encode())
+            return
+            
+        username, password = creds[0], creds[1]
+        users = load_users()
+        
+        if username not in users:
+            conn.sendall("ERROR: User not found\n".encode())
+            return
+            
+        # Verify password
+        stored = users[username]
+        if crypto_utils.verify_password(
+            password, 
+            bytes.fromhex(stored["hashed_password"]), 
+            bytes.fromhex(stored["salt"])
+        ):
+            conn.sendall("LOGIN_SUCCESS\n".encode())
+            print(f"User {username} logged in")
+        else:
+            conn.sendall("ERROR: Invalid password\n".encode())
+            
+    except Exception as e:
+        conn.sendall(f"LOGIN_ERROR: {str(e)}\n".encode())
+        print(f"Login error: {e}")
+
 
 
 # Ensure the shared files directory exists
@@ -192,6 +225,9 @@ def handle_client_connection(conn, addr):
             
         elif command == "LIST":
             handle_list(conn)
+         
+        elif command == "LOGIN":
+            handle_login(conn)
             
         else:
             conn.sendall("ERROR: Unknown command\n".encode())

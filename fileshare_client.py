@@ -29,7 +29,33 @@ def register_user():
     finally:
         conn.close()
         
+def login_user():
+    username = input("Enter username: ").strip()
+    password = input("Enter password: ").strip()
+
+    try:
+        conn = send_command("LOGIN")
         
+        # Wait for ready signal
+        ack = conn.recv(1024).decode().strip()
+        if ack != "LOGIN_READY":
+            print("Protocol error during login")
+            return
+            
+        # Send credentials
+        conn.sendall(f"{username}\n{password}\n".encode())
+        
+        # Get response
+        response = conn.recv(1024).decode().strip()
+        print(response)
+        
+    except Exception as e:
+        print(f"Login failed: {str(e)}")
+    finally:
+        conn.close()
+
+
+            
 def send_command(command, extra_data=None):
     """
     Connect to the peer, send a command, and optionally extra data.
@@ -145,8 +171,9 @@ def main():
         print("1. List shared files")
         print("2. Upload a file")
         print("3. Download a file")
-        print("4. Register new user")
-        print("5. Exit")
+        print("4. Login user")
+        print("5. Register new user")
+        print("6. Exit")
         choice = input("Enter your choice: ").strip()
 
         if choice == "1":
@@ -156,8 +183,10 @@ def main():
         elif choice == "3":
             download_file()
         elif choice == "4":
-            register_user()  
+            login_user()   
         elif choice == "5":
+            register_user()  
+        elif choice == "6":
             print("Exiting.")
             break
         else:
