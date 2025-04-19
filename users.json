@@ -6,6 +6,9 @@
     "habiba": {
         "hashed_password": "6c26b378d76c70925a822d60e85ba4706c8e919108b1df99feb6bb7f448d357f",
         "salt": "c14c56183de7aa9db0bc4e227a884c37"
+    },
+    "kareem": {
+        "hashed_password": "80a0b7fc42dbb77677e7ad7eb920505ba012462b676a1cccb995f50c8f16bc7d",
+        "salt": "55682f7b8a3846cdd42f52ab22b6f731"
     }
-    
 }

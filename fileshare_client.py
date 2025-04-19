@@ -1,168 +1,165 @@
 import os
 import socket
 
-# Configuration defaults
-PEER_HOST = "127.0.0.1"
+PEER_HOST = '127.0.0.1'
 PEER_PORT = 5000
+session_token = None
+
+
+def send_command(sock, command):
+    if session_token:
+        sock.sendall(f"{session_token}\n".encode())
+    sock.sendall(f"{command}\n".encode())
+
 
 def register_user():
-    username = input("Enter username: ").strip()
-    password = input("Enter password: ").strip()
-
-    try:
-        conn = send_command("REGISTER")
-        
-        # Wait for acknowledgement
-        ack = conn.recv(1024).decode().strip()
-        if ack != "REGISTER_ACK":
-            print("Registration protocol error")
-            return
-            
-        # Send credentials
-        conn.sendall(f"{username}\n{password}\n".encode())
-        
-        # Get final response
-        response = conn.recv(1024).decode().strip()
-        print(response)
-    except Exception as e:
-        print(f"Registration failed: {e}")
-    finally:
-        conn.close()
-        
-def login_user():
-    username = input("Enter username: ").strip()
-    password = input("Enter password: ").strip()
-
-    try:
-        conn = send_command("LOGIN")
-        
-        # Wait for ready signal
-        ack = conn.recv(1024).decode().strip()
-        if ack != "LOGIN_READY":
-            print("Protocol error during login")
-            return
-            
-        # Send credentials
-        conn.sendall(f"{username}\n{password}\n".encode())
-        
-        # Get response
-        response = conn.recv(1024).decode().strip()
-        print(response)
-        
-    except Exception as e:
-        print(f"Login failed: {str(e)}")
-    finally:
-        conn.close()
-
-
-            
-def send_command(command, extra_data=None):
-    """
-    Connect to the peer, send a command, and optionally extra data.
-    Returns the connection object after sending the command.
-    """
+    global session_token
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((PEER_HOST, PEER_PORT))
-    s.sendall(f"{command}\n".encode())
-    return s
+    try:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'REGISTER')
+        resp = s.recv(1024).decode().strip()
+        if resp != 'READY':
+            print('Unable to register at this time. Please try again later.')
+        else:
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            result = s.recv(1024).decode().strip()
+            if result.startswith('ERROR'):
+                print('Registration failed:', result.split(':', 1)[1].strip())
+            else:
+                print('Registration successful! You can now log in.')
+    except Exception:
+        print('Could not connect to server. Please check your network and try again.')
+    finally:
+        s.close()
+
+
+def login_user():
+    global session_token
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'LOGIN')
+        resp = s.recv(1024).decode().strip()
+        if resp != 'LOGIN_READY':
+            print('Unable to log in at this time. Please try again later.')
+        else:
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            parts = s.recv(1024).decode().strip().split()
+            if parts[0] == 'LOGIN_SUCCESS':
+                session_token = parts[1]
+                print('Login successful!')
+            else:
+                error_message = ' '.join(parts[1:]) if len(
+                    parts) > 1 else 'Invalid credentials.'
+                print('Login failed:', error_message)
+    except Exception:
+        print('Could not connect to server. Please check your network and try again.')
+    finally:
+        s.close()
 
 
 def list_files():
+    if not session_token:
+        print('Please log in to view shared files.')
+        return
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        conn = send_command("LIST")
-        data = conn.recv(4096).decode()
-        print("Shared files on peer:")
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'LIST')
+        data = s.recv(4096).decode()
+        print('Shared files on server:')
         print(data)
-    except Exception as e:
-        print(f"Error listing files: {e}")
+    except Exception:
+        print('Failed to retrieve file list. Please try again later.')
     finally:
-        conn.close()
+        s.close()
 
 
 def upload_file():
-    file_path = input("Enter the full path of the file to upload: ").strip()
-    if not os.path.isfile(file_path):
-        print("File does not exist.")
+    if not session_token:
+        print('You must log in before uploading files.')
         return
-
-    file_name = os.path.basename(file_path)
-    file_size = os.path.getsize(file_path)
-
+    filepath = input("Enter file path to upload: ").strip()
+    if not os.path.isfile(filepath):
+        print("File not found. Please check the path and try again.")
+        return
+    filename = os.path.basename(filepath)
+    size = os.path.getsize(filepath)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        conn = send_command("UPLOAD")
-        # Wait for server READY signal
-        resp = conn.recv(1024).decode().strip()
-        if resp != "READY":
-            print("Server not ready for upload.")
-            conn.close()
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'UPLOAD')
+        resp = s.recv(1024).decode().strip()
+        if resp.startswith('ERROR: Invalid session'):
+            print('Session expired or invalid. Please log in again.')
             return
-
-        # Send file name
-        conn.sendall(f"{file_name}\n".encode())
-        # Send file size
-        conn.sendall(f"{file_size}\n".encode())
-
-        # Send file content in chunks
-        with open(file_path, 'rb') as f:
+        if resp != 'READY':
+            print('Server is not ready to receive files. Please try again later.')
+            return
+        s.sendall(f"{filename}\n".encode())
+        s.sendall(f"{size}\n".encode())
+        with open(filepath, 'rb') as f:
             while True:
                 chunk = f.read(4096)
                 if not chunk:
                     break
-                conn.sendall(chunk)
-
-        response = conn.recv(1024).decode().strip()
-        print(response)
-    except Exception as e:
-        print(f"Error uploading file: {e}")
+                s.sendall(chunk)
+        result = s.recv(1024).decode().strip()
+        print(result)
+    except Exception:
+        print('Upload failed due to a network error. Please try again.')
     finally:
-        conn.close()
+        s.close()
 
 
 def download_file():
-    file_name = input("Enter the name of the file to download: ").strip()
-    dest_path = input("Enter the destination path to save the file: ").strip()
-
+    if not session_token:
+        print('You must log in before downloading files.')
+        return
+    filename = input("Enter file name to download: ").strip()
+    dest = input("Save as: ").strip()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        conn = send_command("DOWNLOAD")
-        # Wait for server READY signal
-        resp = conn.recv(1024).decode().strip()
-        if resp != "READY":
-            print("Server not ready for download.")
-            conn.close()
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'DOWNLOAD')
+        resp = s.recv(1024).decode().strip()
+        if resp.startswith('ERROR: Invalid session'):
+            print('Session expired or invalid. Please log in again.')
             return
-
-        # Send the file name
-        conn.sendall(f"{file_name}\n".encode())
-        # Receive file size or error message
-        size_data = conn.recv(1024).decode().strip()
-        if size_data.startswith("ERROR"):
-            print(size_data)
-            conn.close()
+        if resp != 'READY':
+            print('Server is not ready to send files. Please try again later.')
             return
-
+        s.sendall(f"{filename}\n".encode())
+        size_str = s.recv(1024).decode().strip()
+        if size_str.startswith('ERROR'):
+            print(size_str.split(':', 1)[1].strip())
+            return
         try:
-            file_size = int(size_data)
+            total = int(size_str)
         except ValueError:
-            print("Invalid file size received.")
-            conn.close()
+            print("Received invalid file size from server.")
             return
-
-        # Send acknowledgment
-        conn.sendall("READY\n".encode())
-
+        s.sendall(b'READY\n')
         received = 0
-        with open(dest_path, 'wb') as f:
-            while received < file_size:
-                chunk = conn.recv(min(4096, file_size - received))
+        with open(dest, 'wb') as f:
+            while received < total:
+                chunk = s.recv(min(4096, total - received))
                 if not chunk:
                     break
                 f.write(chunk)
                 received += len(chunk)
-        print(f"Download complete. Received {received} bytes.")
-    except Exception as e:
-        print(f"Error downloading file: {e}")
+        print(f"Downloaded {received} bytes successfully.")
+    except Exception:
+        print('Download failed due to a network error. Please try again.')
     finally:
-        conn.close()
+        s.close()
 
 
 def main():
@@ -174,23 +171,22 @@ def main():
         print("4. Login user")
         print("5. Register new user")
         print("6. Exit")
-        choice = input("Enter your choice: ").strip()
-
-        if choice == "1":
+        choice = input("Choice: ").strip()
+        if choice == '1':
             list_files()
-        elif choice == "2":
+        elif choice == '2':
             upload_file()
-        elif choice == "3":
+        elif choice == '3':
             download_file()
-        elif choice == "4":
-            login_user()   
-        elif choice == "5":
-            register_user()  
-        elif choice == "6":
-            print("Exiting.")
+        elif choice == '4':
+            login_user()
+        elif choice == '5':
+            register_user()
+        elif choice == '6':
+            print('Goodbye!')
             break
         else:
-            print("Invalid choice. Try again.")
+            print("Invalid option. Please choose a number between 1 and 6.")
 
 
 # Configuration step at module level
