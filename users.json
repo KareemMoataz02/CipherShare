@@ -10,5 +10,9 @@
     "kareem": {
         "hashed_password": "80a0b7fc42dbb77677e7ad7eb920505ba012462b676a1cccb995f50c8f16bc7d",
         "salt": "55682f7b8a3846cdd42f52ab22b6f731"
+    },
+    "secret": {
+        "hashed_password": "3255c0f47245494983c61177ca600e584f82bda5ac024dca4088576c8ca68675",
+        "salt": "74f42da21e9615787f25f54834b850ee"
     }
 }
