@@ -14,5 +14,9 @@
     "secret": {
         "hashed_password": "3255c0f47245494983c61177ca600e584f82bda5ac024dca4088576c8ca68675",
         "salt": "74f42da21e9615787f25f54834b850ee"
+    },
+    "mariam": {
+        "hashed_password": "18665102866425f8b45c070ad15544d1d0d6f768c14e09c6b213658de1c25afd",
+        "salt": "8ee1d08d7ba3d05870e4605fe6d099bf"
     }
 }

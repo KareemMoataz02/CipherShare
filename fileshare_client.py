@@ -41,7 +41,7 @@ def register_user() -> None:
 
 
 def login_user() -> None:
-    """Authenticate and obtain a session token from the peer."""
+    """Authenticate and obtain a session token from the peer, then store it securely."""
     global session_token
     username = input("Username: ").strip()
     password = input("Password: ").strip()
@@ -58,13 +58,22 @@ def login_user() -> None:
             parts = s.recv(1024).decode().strip().split()
             if parts[0] == 'LOGIN_SUCCESS':
                 session_token = parts[1]
+                salt_hex = parts[2] if len(parts) > 2 else None
                 print('Login successful!')
+
+                # Save encrypted token if salt was included
+                if salt_hex:
+                    salt = bytes.fromhex(salt_hex)
+                    crypto_utils.save_encrypted_credentials(session_token, password, salt)
+                else:
+                    print("Warning: salt not received — cannot save session securely.")
             else:
-                error_msg = ' '.join(parts[1:]) if len(
-                    parts) > 1 else 'Invalid credentials.'
+                error_msg = ' '.join(parts[1:]) if len(parts) > 1 else 'Invalid credentials.'
                 print('Login failed:', error_msg)
         except Exception:
             print('Could not connect to server. Please check your network and try again.')
+
+
 
 
 def list_files() -> None:
@@ -185,18 +194,29 @@ def download_file() -> None:
 
 def main() -> None:
     """Main menu loop for the CipherShare client."""
-    global PEER_HOST, PEER_PORT
+    global PEER_HOST, PEER_PORT, session_token
+
     # Allow overriding host/port on startup
-    host_input = input(
-        f"Enter peer IP address (default {PEER_HOST}): ").strip()
+    host_input = input(f"Enter peer IP address (default {PEER_HOST}): ").strip()
     if host_input:
         PEER_HOST = host_input
     port_input = input(f"Enter peer port (default {PEER_PORT}): ").strip()
     if port_input.isdigit():
         PEER_PORT = int(port_input)
 
+    # Try auto-login if credentials file exists
+    if os.path.exists("credentials.json"):
+        print("Encrypted credentials found.")
+        password = input("Enter password to auto-login: ").strip()
+        token = crypto_utils.load_encrypted_credentials(password)
+        if token:
+            session_token = token
+            print("Auto-login successful!")
+        else:
+            print("Auto-login failed. You can still log in manually.")
+
     while True:
-        print("\nCipherShare Client - Phase 3")
+        print("\nCipherShare Client - Phase 4")
         print("1. List shared files")
         print("2. Upload a file")
         print("3. Download a file")
@@ -219,6 +239,7 @@ def main() -> None:
             break
         else:
             print("Invalid option. Please choose 1-6.")
+
 
 
 if __name__ == "__main__":

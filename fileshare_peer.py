@@ -75,16 +75,18 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
                 conn_file.write(b'ERROR: User not found\n')
             else:
                 stored = users[username]
-                if crypto_utils.verify_password(
-                    password,
-                    bytes.fromhex(stored['hashed_password']),
-                    bytes.fromhex(stored['salt'])
-                ):
-                    token = secrets.token_hex(16)
-                    sessions[token] = username
-                    conn_file.write(f'LOGIN_SUCCESS {token}\n'.encode())
-                else:
-                    conn_file.write(b'ERROR: Invalid password\n')
+            if crypto_utils.verify_password(
+                password,
+                bytes.fromhex(stored['hashed_password']),
+                bytes.fromhex(stored['salt'])
+            ):
+                token = secrets.token_hex(16)
+                sessions[token] = username
+                salt_hex = stored['salt']
+                conn_file.write(f'LOGIN_SUCCESS {token} {salt_hex}\n'.encode())
+
+            else:
+                conn_file.write(b'ERROR: Invalid password\n')
             conn_file.flush()
             return
 

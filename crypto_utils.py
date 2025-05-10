@@ -1,5 +1,10 @@
 import os
 import secrets
+import json
+from typing import Optional
+
+
+
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.hashes import Hash
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -9,7 +14,7 @@ from cryptography.hazmat.backends import default_backend
 
 # File where the symmetric encryption key is stored
 KEY_FILE = "symmetric.key"
-
+CREDENTIALS_FILE = "credentials.json"
 
 def generate_symmetric_key() -> bytes:
     """Generate a new 256-bit AES key."""
@@ -128,3 +133,39 @@ def decrypt_bytes(iv: bytes, ciphertext: bytes, key: bytes) -> bytes:
     padded = decryptor.update(ciphertext) + decryptor.finalize()
     unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
     return unpadder.update(padded) + unpadder.finalize()
+
+
+def save_encrypted_credentials(token: str, password: str, salt: bytes) -> None:
+    """
+    Encrypts and stores the session token using a key derived from password and salt.
+    """
+    key = derive_key_from_password(password, salt)
+    iv, ciphertext = encrypt_bytes(token.encode(), key)
+    payload = {
+        "salt": salt.hex(),
+        "iv": iv.hex(),
+        "ciphertext": ciphertext.hex()
+    }
+    with open(CREDENTIALS_FILE, "w") as f:
+        json.dump(payload, f, indent=4)
+
+
+def load_encrypted_credentials(password: str) -> Optional[str]:
+    """
+    Decrypts and returns the session token using the password. Returns None if failed.
+    """
+    if not os.path.exists(CREDENTIALS_FILE):
+        return None
+    with open(CREDENTIALS_FILE, "r") as f:
+        data = json.load(f)
+    try:
+        salt = bytes.fromhex(data["salt"])
+        iv = bytes.fromhex(data["iv"])
+        ciphertext = bytes.fromhex(data["ciphertext"])
+        key = derive_key_from_password(password, salt)
+        token = decrypt_bytes(iv, ciphertext, key).decode()
+        return token
+    except Exception:
+        return None
+
+
