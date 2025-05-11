@@ -117,8 +117,10 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
 
         if command == 'LIST':
             # LIST command: send filenames
-            file_list = '\n'.join(shared_files.keys()) or 'No files available.'
+            user_files = [f for f, meta in shared_files.items() if meta.get("owner") == username]
+            file_list = '\n'.join(user_files) if user_files else 'No files available.'
             conn_file.write(f'{file_list}\n'.encode())
+
             conn_file.flush()
 
         elif command == 'UPLOAD':
@@ -167,7 +169,11 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
                     conn_file.flush()
                     return
 
-                shared_files[filename] = {'path': filepath, 'hash': plaintext_hash}
+                shared_files[filename] = {
+                    'path': filepath,
+                    'hash': plaintext_hash,
+                    'owner': username
+                }
                 conn_file.write(f'UPLOAD_SUCCESS Received {received} bytes\n'.encode())
                 conn_file.flush()
                 print(f"[DEBUG] Upload success: {filename} ({received} bytes)")
@@ -187,6 +193,12 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
                 conn_file.write(b'ERROR: File not found\n')
                 conn_file.flush()
                 return
+            
+            if shared_files[filename].get("owner") != username:
+                conn_file.write(b'ERROR: Access denied\n')
+                conn_file.flush()
+                return
+
             meta = shared_files[filename]
             plaintext_hash = meta['hash']
             filepath = meta['path']
