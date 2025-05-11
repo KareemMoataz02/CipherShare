@@ -2,21 +2,23 @@ import os
 import socket
 import crypto_utils
 
-# Configuration: default peer host/port and symmetric key
+# ========== Configuration Constants ==========
 PEER_HOST = '127.0.0.1'
 PEER_PORT = 5000
+CHUNK_SIZE = 1024 * 1024  # 1MB
+
+# ========== Global State ==========
 session_token = None
-# Load or generate symmetric key for file encryption
 SYMM_KEY = crypto_utils.get_symmetric_key()
 
-
+# ========== Core Networking Functions ==========
 def send_command(sock: socket.socket, command: str) -> None:
     """Send session token (if any) and command to the peer."""
     if session_token:
         sock.sendall(f"{session_token}\n".encode())
     sock.sendall(f"{command}\n".encode())
 
-
+# ========== Authentication Functions ==========
 def register_user() -> None:
     """Register a new user by sending username/password to peer."""
     username = input("Username: ").strip()
@@ -24,7 +26,8 @@ def register_user() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.connect((PEER_HOST, PEER_PORT))
-            send_command(s, 'REGISTER')
+            s.sendall(b'REGISTER\n')
+
             resp = s.recv(1024).decode().strip()
             if resp != 'READY':
                 print('Unable to register at this time. Please try again later.')
@@ -39,7 +42,6 @@ def register_user() -> None:
         except Exception:
             print('Could not connect to server. Please check your network and try again.')
 
-
 def login_user() -> None:
     """Authenticate and obtain a session token from the peer, then store it securely."""
     global session_token
@@ -48,7 +50,8 @@ def login_user() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.connect((PEER_HOST, PEER_PORT))
-            send_command(s, 'LOGIN')
+            s.sendall(b'LOGIN\n')
+
             resp = s.recv(1024).decode().strip()
             if resp != 'LOGIN_READY':
                 print('Unable to log in at this time. Please try again later.')
@@ -73,9 +76,7 @@ def login_user() -> None:
         except Exception:
             print('Could not connect to server. Please check your network and try again.')
 
-
-
-
+# ========== File Operations ==========
 def list_files() -> None:
     """Retrieve and display list of shared files from peer."""
     if not session_token:
@@ -90,7 +91,6 @@ def list_files() -> None:
             print(data)
         except Exception:
             print('Failed to retrieve file list. Please try again later.')
-
 
 def upload_file() -> None:
     """Encrypt, hash, and upload a file to the peer."""
@@ -107,6 +107,10 @@ def upload_file() -> None:
     # Read entire file and encrypt
     with open(filepath, 'rb') as f:
         data = f.read()
+    if len(data) == 0:
+        print("Cannot upload an empty file.")
+        return
+
     iv, ciphertext = crypto_utils.encrypt_bytes(data, SYMM_KEY)
     enc_payload = iv + ciphertext
     enc_size = len(enc_payload)
@@ -125,13 +129,20 @@ def upload_file() -> None:
             s.sendall(f"{filename}\n".encode())
             s.sendall(f"{enc_size}\n".encode())
             s.sendall(f"{plaintext_hash}\n".encode())
-            # Send encrypted payload
-            s.sendall(enc_payload)
+            # Send encrypted payload in chunks
+            sent = 0
+            while sent < enc_size:
+                chunk = enc_payload[sent:sent + CHUNK_SIZE]
+                s.sendall(chunk)
+                sent += len(chunk)
+                print(f"[DEBUG] Sent {len(chunk)} bytes (total {sent}/{enc_size})")
+               
+
+
             result = s.recv(1024).decode().strip()
             print(result)
         except Exception:
             print('Upload failed due to a network error. Please try again.')
-
 
 def download_file() -> None:
     """Download, decrypt, and verify integrity of a file from the peer."""
@@ -168,7 +179,7 @@ def download_file() -> None:
             received = 0
             buf = bytearray()
             while received < total:
-                chunk = s.recv(min(4096, total - received))
+                chunk = s.recv(min(CHUNK_SIZE, total - received))
                 if not chunk:
                     break
                 buf.extend(chunk)
@@ -181,6 +192,8 @@ def download_file() -> None:
             # Decrypt and verify
             plaintext = crypto_utils.decrypt_bytes(iv, ciphertext, SYMM_KEY)
             actual_hash = crypto_utils.hash_bytes(plaintext)
+            print(f"Expected hash: {expected_hash}")
+            print(f"Actual hash:   {actual_hash}")
             if actual_hash != expected_hash:
                 print('Integrity check failed! File may be corrupted.')
                 return
@@ -191,7 +204,7 @@ def download_file() -> None:
         except Exception:
             print('Download failed due to a network error. Please try again.')
 
-
+# ========== Main Application ==========
 def main() -> None:
     """Main menu loop for the CipherShare client."""
     global PEER_HOST, PEER_PORT, session_token
@@ -239,8 +252,6 @@ def main() -> None:
             break
         else:
             print("Invalid option. Please choose 1-6.")
-
-
 
 if __name__ == "__main__":
     main()

@@ -5,36 +5,47 @@ import json
 import crypto_utils
 import secrets
 
+# Constants
 HOST = '0.0.0.0'
 PORT = 5000
 SHARED_DIR = "shared_files"
 USERS_FILE = "users.json"
+CHUNK_SIZE = 1024 * 1024  # 1MB
+SESSIONS_FILE = "sessions.json"
 
-# Session token -> username
+# Global state
 sessions = {}
-# filename -> { 'path': filepath, 'hash': plaintext_hash }
 shared_files = {}
-
-# Load or create symmetric key (clients encrypt/decrypt)
-# Peer stores only encrypted blobs; key kept here if needed for server-side ops
 SYMM_KEY = crypto_utils.get_symmetric_key()
 
 # Ensure shared directory exists
 os.makedirs(SHARED_DIR, exist_ok=True)
 
-
+# Helper functions
 def load_users() -> dict:
     if os.path.exists(USERS_FILE):
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
     return {}
 
-
 def save_users(users: dict) -> None:
     with open(USERS_FILE, 'w') as f:
         json.dump(users, f, indent=4)
 
+def load_sessions() -> dict:
+    if os.path.exists(SESSIONS_FILE):
+        with open(SESSIONS_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
+def save_sessions(sessions: dict) -> None:
+    with open(SESSIONS_FILE, "w") as f:
+        json.dump(sessions, f, indent=4)
+
+# Initialize sessions
+sessions = load_sessions()
+
+# Main functionality
 def handle_client_connection(conn: socket.socket, addr) -> None:
     print(f"Accepted connection from {addr}")
     conn_file = conn.makefile('rwb')
@@ -82,6 +93,8 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
             ):
                 token = secrets.token_hex(16)
                 sessions[token] = username
+                save_sessions(sessions)
+
                 salt_hex = stored['salt']
                 conn_file.write(f'LOGIN_SUCCESS {token} {salt_hex}\n'.encode())
 
@@ -109,25 +122,61 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
             conn_file.flush()
 
         elif command == 'UPLOAD':
-            # UPLOAD command: receive encrypted file with hash
-            conn_file.write(b'READY\n')
-            conn_file.flush()
-            filename = conn_file.readline().decode().strip()
-            enc_size = int(conn_file.readline().decode().strip())
-            plaintext_hash = conn_file.readline().decode().strip()
-            filepath = os.path.join(SHARED_DIR, filename)
-            received = 0
-            with open(filepath, 'wb') as f:
-                while received < enc_size:
-                    chunk = conn.recv(min(4096, enc_size - received))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    received += len(chunk)
-            shared_files[filename] = {'path': filepath, 'hash': plaintext_hash}
-            conn_file.write(
-                f'UPLOAD_SUCCESS Received {received} bytes\n'.encode())
-            conn_file.flush()
+            try:
+                conn_file.write(b'READY\n')
+                conn_file.flush()
+
+                filename = conn_file.readline().decode().strip()
+                print(f"[DEBUG] Got filename: {filename}")
+                enc_size_str = conn_file.readline().decode().strip()
+                print(f"[DEBUG] Got enc_size string: {enc_size_str}")
+                plaintext_hash = conn_file.readline().decode().strip()
+                print(f"[DEBUG] Got hash: {plaintext_hash}")
+
+                if not filename or not enc_size_str or not plaintext_hash:
+                    conn_file.write(b'ERROR: Missing metadata\n')
+                    conn_file.flush()
+                    print("[ERROR] Missing metadata")
+                    return
+
+                try:
+                    enc_size = int(enc_size_str)
+                except ValueError:
+                    conn_file.write(b'ERROR: Invalid file size\n')
+                    conn_file.flush()
+                    print("[ERROR] Invalid file size")
+                    return
+
+                print(f"[DEBUG] Receiving {enc_size} bytes for {filename}")
+                filepath = os.path.join(SHARED_DIR, filename)
+                received = 0
+
+                with open(filepath, 'wb') as f:
+                    while received < enc_size:
+                        chunk = conn_file.read(min(CHUNK_SIZE, enc_size - received))
+                        if not chunk:
+                            print("[ERROR] Connection lost or client stopped sending data.")
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                        print(f"[DEBUG] Received {len(chunk)} bytes (total {received}/{enc_size})")
+
+                if received != enc_size:
+                    print(f"[ERROR] Incomplete file: expected {enc_size}, got {received}")
+                    conn_file.write(f"ERROR: Incomplete file received ({received}/{enc_size})\n".encode())
+                    conn_file.flush()
+                    return
+
+                shared_files[filename] = {'path': filepath, 'hash': plaintext_hash}
+                conn_file.write(f'UPLOAD_SUCCESS Received {received} bytes\n'.encode())
+                conn_file.flush()
+                print(f"[DEBUG] Upload success: {filename} ({received} bytes)")
+
+            except Exception as e:
+                print(f"[ERROR] Exception during upload: {e}")
+                conn_file.write(b'ERROR: Upload failed\n')
+                conn_file.flush()
+
 
         elif command == 'DOWNLOAD':
             # DOWNLOAD command: send expected hash and encrypted file
@@ -150,10 +199,10 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
                 return
             with open(filepath, 'rb') as f:
                 while True:
-                    data = f.read(4096)
-                    if not data:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
                         break
-                    conn.sendall(data)
+                    conn.sendall(chunk)
 
         else:
             conn_file.write(b'ERROR: Unknown command\n')
@@ -165,7 +214,6 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
     finally:
         conn_file.close()
         conn.close()
-
 
 if __name__ == '__main__':
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
