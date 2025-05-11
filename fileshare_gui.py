@@ -4,6 +4,8 @@ import json
 import customtkinter as ctk
 from tkinter import filedialog
 import crypto_utils
+import tkinter as tk
+
 
 # ========== Configuration Constants ==========
 PEER_HOST = '127.0.0.1'
@@ -126,6 +128,10 @@ class CipherShareGUI(ctk.CTk):
         btn_download = ctk.CTkButton(
             frm, text="Download", corner_radius=20, command=self.download_file)
         btn_download.grid(row=3, column=3, padx=10)
+        
+        logout_button = ctk.CTkButton(frm, text="Logout", corner_radius=20, command=self.logout)
+        logout_button.grid(row=4, column=0, padx=10, pady=10)
+
 
         for i in range(4):
             frm.grid_columnconfigure(i, weight=1)
@@ -193,7 +199,7 @@ class CipherShareGUI(ctk.CTk):
                 parts = s.recv(1024).decode().strip().split()
                 if parts[0] == 'LOGIN_SUCCESS':
                     session_token = parts[1]
-                    self.log("Login successful.")
+                    self.log("Login successful. Welcome!")
                 else:
                     self.log("Login failed: " + ' '.join(parts[1:]))
         except Exception as e:
@@ -302,6 +308,31 @@ class CipherShareGUI(ctk.CTk):
                 self.log(f"Download saved to {dest}.")
         except Exception as e:
             self.log(f"Error: {e}")
+            
+    def logout(self):
+        global session_token
+        session_token = None
+
+        # Clear login fields
+        self.entry_user.delete(0, tk.END)
+        self.entry_pass.delete(0, tk.END)
+
+        # Clear file input fields using correct widget names
+        self.upload_path.delete(0, tk.END)
+        self.download_file_entry.delete(0, tk.END)
+        self.download_dest_entry.delete(0, tk.END)
+        self.share_file_entry.delete(0, tk.END)
+        self.share_users_entry.delete(0, tk.END)
+
+        # Clear log area
+        self.txt_output.delete("1.0", tk.END)
+
+        # Delete credentials
+        try:
+            os.remove("credentials.json")
+            self.log("You have been logged out.")
+        except FileNotFoundError:
+            self.log("No saved login session found.")
 
 
 if __name__ == '__main__':

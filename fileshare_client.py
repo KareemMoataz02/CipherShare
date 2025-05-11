@@ -529,6 +529,14 @@ def download_file() -> None:
         except Exception:
             print('Download failed due to a network error. Please try again.')
 
+def logout_user() -> None:
+    """Logs out by deleting saved encrypted credentials."""
+    try:
+        os.remove(CREDENTIALS_FILE)
+        print("Logged out successfully.")
+    except FileNotFoundError:
+        print("No saved session found.")
+
 
 if __name__ == '__main__':
     peers = discover_peers()
@@ -546,7 +554,8 @@ if __name__ == '__main__':
         print("4. Share a file with users")
         print("5. Login user")
         print("6. Register new user")
-        print("7. Exit")
+        print("7. Logout")
+        print("8. Exit")
         choice = input("Choice: ").strip()
         if choice == '1':
             list_files()
@@ -560,7 +569,9 @@ if __name__ == '__main__':
             login_user()
         elif choice == '6':
             register_user()
-        elif choice == '7':
+        elif choice == '6':
+            logout_user()   
+        elif choice == '8':
             break
         else:
             print("Invalid option. Please choose 1-7.")

@@ -128,7 +128,7 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
             if not meta:
                 conn_file.write(b'ERROR: File not found\n')
             elif meta['owner'] != user:
-                conn_file.write(b'ERROR: Not owner\n')
+                conn_file.write(b'ERROR: You can only share files you uploaded\n')
             else:
                 targets = [u.strip()
                            for u in user_list.split(',') if u.strip()]
