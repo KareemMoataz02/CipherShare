@@ -151,4 +151,15 @@ Adds secure credential storage, a user-friendly GUI, fine-grained file sharing, 
 
 **Note:** Ensure `cryptography` and `customtkinter` are installed.
 
----
+## 📽️ Demo Video
+
+To see CipherShare in action, check out our full walkthrough on YouTube:
+
+**YouTube Demo:** [https://youtu.be/IpV2XJ3_X0Y](https://youtu.be/IpV2XJ3_X0Y)
+
+The video demonstrates:
+- CLI and GUI login/logout
+- Secure file upload and download
+- File sharing with specific users
+- Peer discovery and encryption validation
+
