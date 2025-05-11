@@ -12,6 +12,8 @@ PEER_HOST = '127.0.0.1'
 PEER_PORT = 5000
 BROADCAST_PORT = PEER_PORT + 1
 CHUNK_SIZE = 1024 * 1024  # 1MB
+CREDENTIALS_FILE = "credentials.json"
+
 
 # ========== Global State ==========
 session_token = None
@@ -222,16 +224,23 @@ class CipherShareGUI(ctk.CTk):
         if not session_token:
             self.log("Login required to upload files.")
             return
+
         path = self.upload_path.get().strip()
         if not path or not os.path.isfile(path):
             self.log("Valid file path required to upload.")
             return
+
+        if os.path.getsize(path) == 0:
+            self.log("Cannot upload an empty file.")
+            return
+
         plaintext_hash = crypto_utils.hash_file(path)
         with open(path, 'rb') as f:
             data = f.read()
         iv, ct = crypto_utils.encrypt_bytes(data, SYMM_KEY)
         payload = iv + ct
         size = len(payload)
+
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((PEER_HOST, PEER_PORT))
@@ -248,6 +257,7 @@ class CipherShareGUI(ctk.CTk):
                 self.log(res)
         except Exception as e:
             self.log(f"Error: {e}")
+
 
     def share_file(self):
         if not session_token:
@@ -273,41 +283,71 @@ class CipherShareGUI(ctk.CTk):
         if not session_token:
             self.log("Login required to download files.")
             return
+
         fname = self.download_file_entry.get().strip()
         dest = self.download_dest_entry.get().strip()
         if not fname or not dest:
             self.log("Filename and destination required to download.")
             return
+
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((PEER_HOST, PEER_PORT))
                 send_command(s, 'DOWNLOAD')
+
                 if s.recv(1024).decode().strip() != 'READY':
                     self.log("Download failed: server not ready.")
                     return
+
                 s.sendall(f"{fname}\n".encode())
                 sf = s.makefile('rwb')
+
+         
                 exp = sf.readline().decode().strip()
-                total = int(sf.readline().decode().strip())
+                if exp.startswith("ERROR"):
+                    self.log(exp)
+                    return
+
+              
+                size_line = sf.readline().decode().strip()
+                if size_line.startswith("ERROR"):
+                    self.log(size_line)
+                    return
+
+                try:
+                    total = int(size_line)
+                except ValueError:
+                    self.log(f"Invalid size received: {size_line}")
+                    return
+
                 s.sendall(b'READY\n')
+
                 buf = bytearray()
                 recv = 0
                 while recv < total:
-                    chunk = s.recv(min(CHUNK_SIZE, total-recv))
+                    chunk = s.recv(min(CHUNK_SIZE, total - recv))
+                    if not chunk:
+                        break
                     buf.extend(chunk)
                     recv += len(chunk)
+
                 sf.close()
                 iv, ct = buf[:16], buf[16:]
                 pt = crypto_utils.decrypt_bytes(iv, ct, SYMM_KEY)
                 actual = crypto_utils.hash_bytes(pt)
+
                 if actual != exp:
                     self.log("Integrity check failed.")
                     return
+
                 with open(dest, 'wb') as f:
                     f.write(pt)
+
                 self.log(f"Download saved to {dest}.")
+
         except Exception as e:
             self.log(f"Error: {e}")
+
             
     def logout(self):
         global session_token

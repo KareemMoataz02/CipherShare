@@ -96,7 +96,10 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
                     token = secrets.token_hex(16)
                     sessions[token] = uname
                     save_json(SESSIONS_FILE, sessions)
-                    conn_file.write(f'LOGIN_SUCCESS {token}\n'.encode())
+                    
+                    salt = users[uname]['salt']
+                    conn_file.write(f'LOGIN_SUCCESS {token} {stored["salt"]}\n'.encode())
+
                 else:
                     conn_file.write(b'ERROR: Invalid password\n')
             conn_file.flush()
@@ -130,10 +133,18 @@ def handle_client_connection(conn: socket.socket, addr) -> None:
             elif meta['owner'] != user:
                 conn_file.write(b'ERROR: You can only share files you uploaded\n')
             else:
-                targets = [u.strip()
-                           for u in user_list.split(',') if u.strip()]
+                targets = [u.strip() for u in user_list.split(',') if u.strip()]
+                invalid_users = [u for u in targets if u not in users]
+
+                # Still share with all targets regardless
                 meta.setdefault('shared_with', []).extend(targets)
-                conn_file.write(b'SHARE_SUCCESS\n')
+
+                if invalid_users:
+                    msg = f"SHARE_WARNING: Users not found: {', '.join(invalid_users)}"
+                    conn_file.write(f"{msg}\n".encode())
+                else:
+                    conn_file.write(b'SHARE_SUCCESS\n')
+
             conn_file.flush()
 
         elif cmd == 'UPLOAD':
