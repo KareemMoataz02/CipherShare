@@ -99,11 +99,56 @@ Integrates symmetric encryption and hashing to protect confidentiality and integ
 
 ---
 
-## Next Steps
+## Phase 4 – Credential Encryption, GUI, Access Control, and Discovery
 
-Phase 4 (planned):
-- Stronger KDFs (Argon2),
-- Client‑side encrypted credential storage,
-- Enhanced P2P discovery (chunking, distributed index),
-- Fine‑grained access control.
+**Description:**
+Adds secure credential storage, a user-friendly GUI, fine-grained file sharing, and peer discovery.
 
+**Features:**
+- **Encrypted Credential Management:**
+  - Stores session tokens securely in `credentials.json` using password-derived keys.
+  - Auto-login prompts for password to decrypt the saved session token.
+
+- **Enhanced Access Control:**
+  - Files are associated with their uploader (`owner`).
+  - Uploaders can optionally **share files with specific usernames**.
+  - Only owners and authorized users can download shared files.
+  - File listing respects access rights (private files hidden from others).
+
+- **Upload Validation:**
+  - Empty files (0 KB) are rejected at both CLI and GUI level.
+
+- **Peer Discovery:**
+  - Peers respond to UDP broadcast `DISCOVER` messages with their host/port.
+  - CLI client auto-selects the first discovered peer.
+
+- **GUI Support (Tkinter/CTk):**
+  - Graphical interface to:
+    - Login/Register
+    - Upload and Download files
+    - List available files
+    - Share files with specific users
+    - Logout and clear saved credentials
+  - Password fields are hidden; logs and feedback shown in real-time.
+
+**How to Run (Phase 4):**
+
+### Command-Line Mode:
+1. Start peer/server:
+   ```bash
+   python3 fileshare_peer.py
+   ```
+2. Run client:
+   ```bash
+   python3 fileshare_client.py
+   ```
+
+### GUI Mode:
+1. Start GUI client:
+   ```bash
+   python3 fileshare_gui.py
+   ```
+
+**Note:** Ensure `cryptography` and `customtkinter` are installed.
+
+---
