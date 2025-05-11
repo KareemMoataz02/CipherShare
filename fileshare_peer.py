@@ -1,268 +1,232 @@
+# fileshare_peer.py
 import os
 import socket
 import threading
 import json
-import crypto_utils 
+import crypto_utils
+import secrets
 
-# Configuration
+# Constants
 HOST = '0.0.0.0'
 PORT = 5000
+BROADCAST_PORT = PORT + 1  # UDP discovery port
 SHARED_DIR = "shared_files"
+USERS_FILE = "users.json"
+SESSIONS_FILE = "sessions.json"
+CHUNK_SIZE = 1024 * 1024  # 1MB
 
-# File to store user data
-USERS_FILE = "users.json"  
+# Global state
+sessions = {}
+shared_files = {}  # filename -> {path, hash, owner, shared_with}
 
-def load_users():
-    """Load user data from JSON file. Returns a dictionary."""
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
+# Ensure shared directory exists
+os.makedirs(SHARED_DIR, exist_ok=True)
+
+# User/session persistence
+
+
+def load_json(path: str) -> dict:
+    if os.path.exists(path):
+        with open(path, 'r') as f:
             return json.load(f)
-    return {} 
-
-def save_users(users):
-    """Save user data to JSON file."""
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=4)  
-        
-        
-def handle_register(conn):
-    try:
-       
-        conn.sendall("READY\n".encode())
-        
-        # Receive username and password in one go
-        data = conn.recv(1024).decode().strip().split('\n')
-        if len(data) < 2:
-            conn.sendall("ERROR: Need username and password\n".encode())
-            return
-            
-        username = data[0]
-        password = data[1]
-
-        users = load_users()
-        if username in users:
-            conn.sendall("ERROR: Username exists\n".encode())
-            return
-
-        hashed_password, salt = crypto_utils.hash_password(password)
-        users[username] = {"hashed_password": hashed_password, "salt": salt}
-        save_users(users)
-        conn.sendall("REGISTER_SUCCESS\n".encode())
-
-    except Exception as e:
-        conn.sendall(f"REGISTER_ERROR: {e}\n".encode())
-        
-def handle_login(conn):
-    try:
-        conn.sendall("LOGIN_READY\n".encode())  # Acknowledge command
-        
-        # Receive credentials (username\npassword)
-        creds = conn.recv(1024).decode().strip().split('\n')
-        if len(creds) != 2:
-            conn.sendall("ERROR: Invalid format\n".encode())
-            return
-            
-        username, password = creds[0], creds[1]
-        users = load_users()
-        
-        if username not in users:
-            conn.sendall("ERROR: User not found\n".encode())
-            return
-            
-        # Verify password
-        stored = users[username]
-        if crypto_utils.verify_password(
-            password, 
-            bytes.fromhex(stored["hashed_password"]), 
-            bytes.fromhex(stored["salt"])
-        ):
-            conn.sendall("LOGIN_SUCCESS\n".encode())
-            print(f"User {username} logged in")
-        else:
-            conn.sendall("ERROR: Invalid password\n".encode())
-            
-    except Exception as e:
-        conn.sendall(f"LOGIN_ERROR: {str(e)}\n".encode())
-        print(f"Login error: {e}")
+    return {}
 
 
-
-# Ensure the shared files directory exists
-if not os.path.exists(SHARED_DIR):
-    os.makedirs(SHARED_DIR)
-
-# In-memory shared files list: keys are filenames, values are full paths.
-shared_files = {}
+def save_json(path: str, data: dict) -> None:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
 
 
-def handle_upload(conn):
-    try:
-        # Send READY signal to client
-        conn.sendall("READY\n".encode())
+# Initialize users and sessions
+users = load_json(USERS_FILE)
+sessions = load_json(SESSIONS_FILE)
 
-        # Receive file name
-        file_name = conn.recv(1024).decode().strip()
-        if not file_name:
-            conn.sendall("ERROR: No filename received\n".encode())
-            return
-
-        # Receive file size (as string)
-        file_size_str = conn.recv(1024).decode().strip()
-        try:
-            file_size = int(file_size_str)
-        except ValueError:
-            conn.sendall("ERROR: Invalid file size\n".encode())
-            return
-
-        # Define file path
-        file_path = os.path.join(SHARED_DIR, file_name)
-        received = 0
-
-        # Open file to write bytes
-        with open(file_path, 'wb') as f:
-            while received < file_size:
-                chunk = conn.recv(min(4096, file_size - received))
-                if not chunk:
-                    break
-                f.write(chunk)
-                received += len(chunk)
-
-        # Update shared files list
-        shared_files[file_name] = file_path
-        conn.sendall(f"UPLOAD SUCCESS: Received {received} bytes\n".encode())
-    except Exception as e:
-        conn.sendall(f"UPLOAD ERROR: {e}\n".encode())
+# UDP discovery listener
 
 
-def handle_download(conn):
-    try:
-        # Send READY signal to client
-        conn.sendall("READY\n".encode())
-
-        # Receive file name
-        file_name = conn.recv(1024).decode().strip()
-        if file_name not in shared_files:
-            conn.sendall("ERROR: File not found\n".encode())
-            return
-
-        file_path = shared_files[file_name]
-        file_size = os.path.getsize(file_path)
-        # Send file size to client
-        conn.sendall(f"{file_size}\n".encode())
-
-        # Wait for client acknowledgment
-        ack = conn.recv(1024).decode().strip()
-        if ack != "READY":
-            return
-
-        # Send the file content
-        with open(file_path, 'rb') as f:
-            while True:
-                data = f.read(4096)
-                if not data:
-                    break
-                conn.sendall(data)
-    except Exception as e:
-        conn.sendall(f"DOWNLOAD ERROR: {e}\n".encode())
-
-
-def handle_list(conn):
-    try:
-        file_list = "\n".join(shared_files.keys())
-        if not file_list:
-            file_list = "No files available."
-        conn.sendall(file_list.encode())
-    except Exception as e:
-        conn.sendall(f"LIST ERROR: {e}\n".encode())
-
-def handle_client_connection(conn, addr):
-    print(f"Accepted connection from {addr}")
-    try:
-        
-        command = conn.recv(1024).decode().strip().upper()
-        if not command:
-            print(f"Client {addr} disconnected without sending command")
-            return
-            
-        print(f"Processing command: {command} from {addr}")
-
-        if command == "REGISTER":
-            # Send acknowledgement
-            conn.sendall("REGISTER_ACK\n".encode())
-            
-            # Receive credentials (username\npassword)
-            creds = conn.recv(1024).decode().strip().split('\n')
-            if len(creds) != 2:
-                conn.sendall("ERROR: Invalid format. Expected username\\npassword\n".encode())
-                return
-                
-            username, password = creds[0], creds[1]
-            print(f"Registration attempt for user: {username}")
-            
-            # Process registration
-            users = load_users()
-            if username in users:
-                conn.sendall("ERROR: Username already exists\n".encode())
-            else:
-                try:
-                    hashed_pw, salt = crypto_utils.hash_password(password)
-                    users[username] = {
-                        'hashed_password': hashed_pw.hex(),
-                        'salt': salt.hex()
-                    }
-                    save_users(users)
-                    conn.sendall("REGISTER_SUCCESS\n".encode())
-                    print(f"Registered new user: {username}")
-                except Exception as e:
-                    conn.sendall(f"ERROR: Registration failed ({str(e)})\n".encode())
-                    print(f"Registration error for {username}: {e}")
-
-        elif command == "UPLOAD":
-            handle_upload(conn)
-            
-        elif command == "DOWNLOAD":
-            handle_download(conn)
-            
-        elif command == "LIST":
-            handle_list(conn)
-         
-        elif command == "LOGIN":
-            handle_login(conn)
-            
-        else:
-            conn.sendall("ERROR: Unknown command\n".encode())
-            print(f"Unknown command from {addr}: {command}")
-
-    except ConnectionResetError:
-        print(f"Client {addr} disconnected abruptly")
-    except Exception as e:
-        print(f"Error handling client {addr}: {str(e)}")
-        try:
-            conn.sendall(f"ERROR: {str(e)}\n".encode())
-        except:
-            pass
-    finally:
-        try:
-            conn.close()
-            print(f"Closed connection for {addr}")
-        except:
-            pass
-        
-        
-
-def start_peer():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((HOST, PORT))
-    server_socket.listen(5)
-    print(f"Peer listening on {HOST}:{PORT}")
-
+def udp_discovery_listener():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((HOST, BROADCAST_PORT))
     while True:
-        conn, addr = server_socket.accept()
-        client_thread = threading.Thread(
-            target=handle_client_connection, args=(conn, addr))
-        client_thread.daemon = True
-        client_thread.start()
+        data, addr = sock.recvfrom(1024)
+        if data.decode().strip() == 'DISCOVER':
+            reply = json.dumps({'host': socket.gethostbyname(
+                socket.gethostname()), 'port': PORT})
+            sock.sendto(reply.encode(), addr)
+
+# Client handler
 
 
-if __name__ == "__main__":
-    start_peer()
+def handle_client_connection(conn: socket.socket, addr) -> None:
+    conn_file = conn.makefile('rwb')
+    try:
+        # First line: REGISTER, LOGIN, or session token
+        line = conn_file.readline().decode().strip()
+        if not line:
+            return
+
+        # Registration
+        if line == 'REGISTER':
+            conn_file.write(b'READY\n')
+            conn_file.flush()
+            uname = conn_file.readline().decode().strip()
+            pwd = conn_file.readline().decode().strip()
+            if uname in users:
+                conn_file.write(b'ERROR: Username exists\n')
+            else:
+                h, s = crypto_utils.hash_password(pwd)
+                users[uname] = {'hashed_password': h.hex(), 'salt': s.hex()}
+                save_json(USERS_FILE, users)
+                conn_file.write(b'REGISTER_SUCCESS\n')
+            conn_file.flush()
+            return
+
+        # Login
+        if line == 'LOGIN':
+            conn_file.write(b'LOGIN_READY\n')
+            conn_file.flush()
+            uname = conn_file.readline().decode().strip()
+            pwd = conn_file.readline().decode().strip()
+            if uname not in users:
+                conn_file.write(b'ERROR: User not found\n')
+            else:
+                stored = users[uname]
+                if crypto_utils.verify_password(pwd, bytes.fromhex(stored['hashed_password']), bytes.fromhex(stored['salt'])):
+                    token = secrets.token_hex(16)
+                    sessions[token] = uname
+                    save_json(SESSIONS_FILE, sessions)
+                    
+                    salt = users[uname]['salt']
+                    conn_file.write(f'LOGIN_SUCCESS {token} {stored["salt"]}\n'.encode())
+
+                else:
+                    conn_file.write(b'ERROR: Invalid password\n')
+            conn_file.flush()
+            return
+
+        # Session validation
+        token = line
+        if token not in sessions:
+            conn_file.write(b'ERROR: Invalid session\n')
+            conn_file.flush()
+            return
+        user = sessions[token]
+
+        # Next: command
+        cmd = conn_file.readline().decode().strip().upper()
+        if cmd == 'LIST':
+            # include own and shared-with files
+            files = [f for f, m in shared_files.items() if m['owner']
+                     == user or user in m.get('shared_with', [])]
+            resp = '\n'.join(files) if files else 'No files available.'
+            conn_file.write(f'{resp}\n'.encode())
+            conn_file.flush()
+
+        elif cmd == 'SHARE':
+            # SHARE <filename> <user1,user2,...>
+            fname = conn_file.readline().decode().strip()
+            user_list = conn_file.readline().decode().strip()
+            meta = shared_files.get(fname)
+            if not meta:
+                conn_file.write(b'ERROR: File not found\n')
+            elif meta['owner'] != user:
+                conn_file.write(b'ERROR: You can only share files you uploaded\n')
+            else:
+                targets = [u.strip() for u in user_list.split(',') if u.strip()]
+                invalid_users = [u for u in targets if u not in users]
+
+                # Still share with all targets regardless
+                meta.setdefault('shared_with', []).extend(targets)
+
+                if invalid_users:
+                    msg = f"SHARE_WARNING: Users not found: {', '.join(invalid_users)}"
+                    conn_file.write(f"{msg}\n".encode())
+                else:
+                    conn_file.write(b'SHARE_SUCCESS\n')
+
+            conn_file.flush()
+
+        elif cmd == 'UPLOAD':
+            conn_file.write(b'READY\n')
+            conn_file.flush()
+            fname = conn_file.readline().decode().strip()
+            size_str = conn_file.readline().decode().strip()
+            hsh = conn_file.readline().decode().strip()
+            try:
+                size = int(size_str)
+            except ValueError:
+                conn_file.write(b'ERROR: Invalid size\n')
+                conn_file.flush()
+                return
+            path = os.path.join(SHARED_DIR, fname)
+            rcvd = 0
+            with open(path, 'wb') as f:
+                while rcvd < size:
+                    chunk = conn_file.read(min(CHUNK_SIZE, size-rcvd))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    rcvd += len(chunk)
+            if rcvd != size:
+                conn_file.write(
+                    f'ERROR: Incomplete ({rcvd}/{size})\n'.encode())
+                conn_file.flush()
+                return
+            shared_files[fname] = {
+                'path': path, 'hash': hsh, 'owner': user, 'shared_with': []}
+            conn_file.write(f'UPLOAD_SUCCESS {rcvd} bytes\n'.encode())
+            conn_file.flush()
+
+        elif cmd == 'DOWNLOAD':
+            conn_file.write(b'READY\n')
+            conn_file.flush()
+            fname = conn_file.readline().decode().strip()
+            meta = shared_files.get(fname)
+            if not meta or (meta['owner'] != user and user not in meta.get('shared_with', [])):
+                conn_file.write(b'ERROR: Access denied\n')
+                conn_file.flush()
+                return
+            ph = meta['hash']
+            path = meta['path']
+            sz = os.path.getsize(path)
+            conn_file.write(f'{ph}\n{sz}\n'.encode())
+            conn_file.flush()
+            ack = conn_file.readline().decode().strip()
+            if ack != 'READY':
+                return
+            with open(path, 'rb') as f:
+                while True:
+                    c = f.read(CHUNK_SIZE)
+                    if not c:
+                        break
+                    conn.sendall(c)
+
+        else:
+            conn_file.write(b'ERROR: Unknown command\n')
+            conn_file.flush()
+    except Exception as e:
+        print(f'Error [{addr}]: {e}')
+    finally:
+        conn_file.close()
+        conn.close()
+
+# Server startup
+
+
+def start():
+    # Start UDP discovery
+    threading.Thread(target=udp_discovery_listener, daemon=True).start()
+    # Start TCP server
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind((HOST, PORT))
+    srv.listen(5)
+    print(f"Peer on {HOST}:{PORT} (discovery {BROADCAST_PORT})")
+    while True:
+        client, addr = srv.accept()
+        threading.Thread(target=handle_client_connection,
+                         args=(client, addr), daemon=True).start()
+
+
+if __name__ == '__main__':
+    start()

@@ -1,11 +1,18 @@
 {
-    "habibayasser": {
-        "hashed_password": "adc7e5336d628f730fc5bb0b602d6c98ecad7f483b65f616e68c96f325b92f31",
-        "salt": "6e7ff55eb47978008b860bdebd384b96"
-    },
     "habiba": {
-        "hashed_password": "6c26b378d76c70925a822d60e85ba4706c8e919108b1df99feb6bb7f448d357f",
-        "salt": "c14c56183de7aa9db0bc4e227a884c37"
+        "hashed_password": "2f6e362b6b40425adb23f77beb4a1ebaa8134b54e9baff5e08ab73c9c4131a9b",
+        "salt": "05e9fa20f9577dbde72482fa01ab0ad6"
+    },
+    "mariam": {
+        "hashed_password": "c965a7715e98e3640ed97054a18762374376052c2a31af319e5b452d49792317",
+        "salt": "866531e5958388b4cafddd7fedcd490b"
+    },
+    "test": {
+        "hashed_password": "142d341b105c2fedc2d0ccd19c2f7585cf60d06a97fb88e344c942f5a2d046e7",
+        "salt": "8b4792ade02549482325803c999e24fd"
+    },
+    "Alice": {
+        "hashed_password": "dbe01d405333e767bcb1a928897ebc66f5d7dfdd93c52ed9b10fd2ecf5cc02d0",
+        "salt": "cf5c3da59e005614329de83a8ffc040f"
     }
-    
 }

@@ -1,205 +1,261 @@
 import os
+import time
+import json
 import socket
+import crypto_utils
 
-# Configuration defaults
-PEER_HOST = "127.0.0.1"
+# ========== Configuration Constants ==========
+PEER_HOST = '127.0.0.1'
 PEER_PORT = 5000
+BROADCAST_PORT = PEER_PORT + 1
+CHUNK_SIZE = 1024 * 1024  # 1MB
+CREDENTIALS_FILE = "credentials.json"
 
-def register_user():
-    username = input("Enter username: ").strip()
-    password = input("Enter password: ").strip()
+# ========== Global State ==========
+session_token = None
+SYMM_KEY = crypto_utils.get_symmetric_key()
 
-    try:
-        conn = send_command("REGISTER")
-        
-        # Wait for acknowledgement
-        ack = conn.recv(1024).decode().strip()
-        if ack != "REGISTER_ACK":
-            print("Registration protocol error")
-            return
-            
-        # Send credentials
-        conn.sendall(f"{username}\n{password}\n".encode())
-        
-        # Get final response
-        response = conn.recv(1024).decode().strip()
-        print(response)
-    except Exception as e:
-        print(f"Registration failed: {e}")
-    finally:
-        conn.close()
-        
-def login_user():
-    username = input("Enter username: ").strip()
-    password = input("Enter password: ").strip()
+# ========== Networking Helpers ==========
+def send_command(sock: socket.socket, command: str) -> None:
+    if session_token:
+        sock.sendall(f"{session_token}\n".encode())
+    sock.sendall(f"{command}\n".encode())
 
-    try:
-        conn = send_command("LOGIN")
-        
-        # Wait for ready signal
-        ack = conn.recv(1024).decode().strip()
-        if ack != "LOGIN_READY":
-            print("Protocol error during login")
-            return
-            
-        # Send credentials
-        conn.sendall(f"{username}\n{password}\n".encode())
-        
-        # Get response
-        response = conn.recv(1024).decode().strip()
-        print(response)
-        
-    except Exception as e:
-        print(f"Login failed: {str(e)}")
-    finally:
-        conn.close()
+# ========== Peer Discovery ==========
+def discover_peers(timeout: float = 2.0) -> list[tuple[str, int]]:
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    udp.settimeout(timeout)
+    udp.sendto(b'DISCOVER', ('<broadcast>', BROADCAST_PORT))
+    found = set()
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            data, addr = udp.recvfrom(1024)
+            info = json.loads(data.decode())
+            found.add((info['host'], info['port']))
+        except socket.timeout:
+            break
+    udp.close()
+    return list(found)
 
-
-            
-def send_command(command, extra_data=None):
-    """
-    Connect to the peer, send a command, and optionally extra data.
-    Returns the connection object after sending the command.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((PEER_HOST, PEER_PORT))
-    s.sendall(f"{command}\n".encode())
-    return s
-
-
-def list_files():
-    try:
-        conn = send_command("LIST")
-        data = conn.recv(4096).decode()
-        print("Shared files on peer:")
+# ========== Core Functions ==========
+def list_files() -> None:
+    if not session_token:
+        print('Please log in to view shared files.')
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'LIST')
+        data = s.recv(8192).decode()
+        print('Shared files on server:')
         print(data)
-    except Exception as e:
-        print(f"Error listing files: {e}")
-    finally:
-        conn.close()
+
+def share_file() -> None:
+    if not session_token:
+        print('Please log in to share files.')
+        return
+    filename = input("Enter file name to share: ").strip()
+    users = input("Enter comma-separated usernames: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'SHARE')
+        s.sendall(f"{filename}\n".encode())
+        s.sendall(f"{users}\n".encode())
+        if resp.startswith("SHARE_WARNING"):
+            print("Warning:", resp.split(":", 1)[1].strip())
 
 
-def upload_file():
-    file_path = input("Enter the full path of the file to upload: ").strip()
-    if not os.path.isfile(file_path):
-        print("File does not exist.")
+def upload_file() -> None:
+    if not session_token:
+        print('You must log in before uploading files.')
+        return
+    filepath = input("Enter file path to upload: ").strip()
+    if not os.path.isfile(filepath):
+        print('File not found.')
+        return  
+    
+    plaintext_hash = crypto_utils.hash_file(filepath)
+    if os.path.getsize(filepath) == 0:
+        print("Cannot upload an empty file.")
         return
 
-    file_name = os.path.basename(file_path)
-    file_size = os.path.getsize(file_path)
+    with open(filepath, 'rb') as f:
+        data = f.read()
 
-    try:
-        conn = send_command("UPLOAD")
-        # Wait for server READY signal
-        resp = conn.recv(1024).decode().strip()
-        if resp != "READY":
-            print("Server not ready for upload.")
-            conn.close()
+    
+    iv, ciphertext = crypto_utils.encrypt_bytes(data, SYMM_KEY)
+    payload = iv + ciphertext
+    enc_size = len(payload)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'UPLOAD')
+        resp = s.recv(1024).decode().strip()
+        if resp != 'READY':
+            print('Upload init failed.')
             return
+        s.sendall(f"{os.path.basename(filepath)}\n".encode())
+        s.sendall(f"{enc_size}\n".encode())
+        s.sendall(f"{plaintext_hash}\n".encode())
+        s.sendall(payload)
+        print(s.recv(1024).decode().strip())
 
-        # Send file name
-        conn.sendall(f"{file_name}\n".encode())
-        # Send file size
-        conn.sendall(f"{file_size}\n".encode())
-
-        # Send file content in chunks
-        with open(file_path, 'rb') as f:
-            while True:
-                chunk = f.read(4096)
-                if not chunk:
-                    break
-                conn.sendall(chunk)
-
-        response = conn.recv(1024).decode().strip()
-        print(response)
-    except Exception as e:
-        print(f"Error uploading file: {e}")
-    finally:
-        conn.close()
-
-
-def download_file():
-    file_name = input("Enter the name of the file to download: ").strip()
-    dest_path = input("Enter the destination path to save the file: ").strip()
-
-    try:
-        conn = send_command("DOWNLOAD")
-        # Wait for server READY signal
-        resp = conn.recv(1024).decode().strip()
-        if resp != "READY":
-            print("Server not ready for download.")
-            conn.close()
+def download_file() -> None:
+    if not session_token:
+        print('You must log in before downloading files.')
+        return
+    filename = input("Enter file name to download: ").strip()
+    dest = input("Save as: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((PEER_HOST, PEER_PORT))
+        send_command(s, 'DOWNLOAD')
+        resp = s.recv(1024).decode().strip()
+        if resp != 'READY':
+            print('Download init failed.')
             return
-
-        # Send the file name
-        conn.sendall(f"{file_name}\n".encode())
-        # Receive file size or error message
-        size_data = conn.recv(1024).decode().strip()
-        if size_data.startswith("ERROR"):
-            print(size_data)
-            conn.close()
+        s.sendall(f"{filename}\n".encode())
+        plaintext_hash = s.recv(1024).decode().strip()
+        if plaintext_hash.startswith("ERROR"):
+            print(plaintext_hash)
             return
-
+        size_response = s.recv(1024).decode().strip()
+        if size_response.startswith("ERROR"):
+            print(size_response)
+            return
         try:
-            file_size = int(size_data)
+            enc_size = int(size_response)
         except ValueError:
-            print("Invalid file size received.")
-            conn.close()
+            print(f"Invalid size received: {size_response}")
+            return
+        s.sendall(b'READY\n')
+        data = bytearray()
+        while len(data) < enc_size:
+            chunk = s.recv(CHUNK_SIZE)
+            if not chunk:
+                break
+            data.extend(chunk)
+        iv = data[:16]
+        ciphertext = data[16:]
+        try:
+            plaintext = crypto_utils.decrypt_bytes(iv, ciphertext, SYMM_KEY)
+        except ValueError:
+            print("Decryption failed — file may have been tampered with.")
             return
 
-        # Send acknowledgment
-        conn.sendall("READY\n".encode())
+        if crypto_utils.hash_bytes(plaintext) != plaintext_hash:
+            print('Integrity check failed!')
+            return
+        with open(dest, 'wb') as f:
+            f.write(plaintext)
+        print(f"Downloaded {filename} as {dest}")
 
-        received = 0
-        with open(dest_path, 'wb') as f:
-            while received < file_size:
-                chunk = conn.recv(min(4096, file_size - received))
-                if not chunk:
-                    break
-                f.write(chunk)
-                received += len(chunk)
-        print(f"Download complete. Received {received} bytes.")
-    except Exception as e:
-        print(f"Error downloading file: {e}")
-    finally:
-        conn.close()
+# ========== Authentication ==========
+def register_user() -> None:
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            s.sendall(b'REGISTER\n')
+            resp = s.recv(1024).decode().strip()
+            if resp != 'READY':
+                print('Unable to register at this time. Please try again later.')
+                return
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            result = s.recv(1024).decode().strip()
+            if result.startswith('ERROR'):
+                print('Registration failed:', result.split(':', 1)[1].strip())
+            else:
+                print('Registration successful! You can now log in.')
+        except Exception:
+            print('Could not connect to server. Please check your network and try again.')
+
+def login_user() -> None:
+    global session_token
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            s.sendall(b'LOGIN\n')
+            resp = s.recv(1024).decode().strip()
+            if resp != 'LOGIN_READY':
+                print('Unable to log in at this time. Please try again later.')
+                return
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            parts = s.recv(1024).decode().strip().split()
+            if parts[0] == 'LOGIN_SUCCESS':
+                session_token = parts[1]
+                salt_hex = parts[2] if len(parts) > 2 else None
+                print('Login successful!')
+                if salt_hex:
+                    salt = bytes.fromhex(salt_hex)
+                    crypto_utils.save_encrypted_credentials(session_token, password, salt)
+                else:
+                    print("Warning: salt not received — cannot save session securely.")
+            else:
+                error_msg = ' '.join(parts[1:]) if len(parts) > 1 else 'Invalid credentials.'
+                print('Login failed:', error_msg)
+        except Exception:
+            print('Could not connect to server. Please check your network and try again.')
+
+def logout_user() -> None:
+    global session_token
+    session_token = None  # Clear session in memory
+    try:
+        os.remove(CREDENTIALS_FILE)
+        print("Logged out successfully.")
+    except FileNotFoundError:
+        print("No saved session found.")
 
 
-def main():
+# ========== Menu ==========
+if __name__ == '__main__':
+    peers = discover_peers()
+    if peers:
+        PEER_HOST, PEER_PORT = peers[0]
+        print(f"Discovered peer at {PEER_HOST}:{PEER_PORT}")
+    else:
+        print("No peers found; using defaults.")
+
+    
+    if os.path.exists(CREDENTIALS_FILE):
+        print("Encrypted credentials found.")
+        password = input("Enter password to auto-login: ")
+        session_token = crypto_utils.load_encrypted_credentials(password)
+        if session_token:
+            print("Auto-login successful!")
+        else:
+            print("Auto-login failed.")
+
     while True:
-        print("\nCipherShare Client - Phase 2")
+        print("\nCipherShare Client")
         print("1. List shared files")
         print("2. Upload a file")
         print("3. Download a file")
-        print("4. Login user")
-        print("5. Register new user")
-        print("6. Exit")
-        choice = input("Enter your choice: ").strip()
-
-        if choice == "1":
+        print("4. Share a file with users")
+        print("5. Login user")
+        print("6. Register new user")
+        print("7. Logout")
+        print("8. Exit")
+        choice = input("Choice: ").strip()
+        if choice == '1':
             list_files()
-        elif choice == "2":
+        elif choice == '2':
             upload_file()
-        elif choice == "3":
+        elif choice == '3':
             download_file()
-        elif choice == "4":
-            login_user()   
-        elif choice == "5":
-            register_user()  
-        elif choice == "6":
-            print("Exiting.")
+        elif choice == '4':
+            share_file()
+        elif choice == '5':
+            login_user()
+        elif choice == '6':
+            register_user()
+        elif choice == '7':
+            logout_user()
+        elif choice == '8':
             break
         else:
-            print("Invalid choice. Try again.")
-
-
-# Configuration step at module level
-host_input = input(f"Enter peer IP address (default {PEER_HOST}): ").strip()
-if host_input:
-    PEER_HOST = host_input
-port_input = input(f"Enter peer port (default {PEER_PORT}): ").strip()
-if port_input.isdigit():
-    PEER_PORT = int(port_input)
-
-if __name__ == "__main__":
-    main()
+            print("Invalid option. Please choose 1–8.")
