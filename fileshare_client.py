@@ -337,14 +337,197 @@ def download_file() -> None:
         print(f"Downloaded {filename} as {dest}")
 
 
-def login_user() -> None:
-    # Existing login logic...
-    pass
-
-
+# ========== Authentication Functions ==========
 def register_user() -> None:
-    # Existing register logic...
-    pass
+    """Register a new user by sending username/password to peer."""
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            s.sendall(b'REGISTER\n')
+
+            resp = s.recv(1024).decode().strip()
+            if resp != 'READY':
+                print('Unable to register at this time. Please try again later.')
+                return
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            result = s.recv(1024).decode().strip()
+            if result.startswith('ERROR'):
+                print('Registration failed:', result.split(':', 1)[1].strip())
+            else:
+                print('Registration successful! You can now log in.')
+        except Exception:
+            print('Could not connect to server. Please check your network and try again.')
+
+
+def login_user() -> None:
+    """Authenticate and obtain a session token from the peer, then store it securely."""
+    global session_token
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            s.sendall(b'LOGIN\n')
+
+            resp = s.recv(1024).decode().strip()
+            if resp != 'LOGIN_READY':
+                print('Unable to log in at this time. Please try again later.')
+                return
+            s.sendall(f"{username}\n".encode())
+            s.sendall(f"{password}\n".encode())
+            parts = s.recv(1024).decode().strip().split()
+            if parts[0] == 'LOGIN_SUCCESS':
+                session_token = parts[1]
+                salt_hex = parts[2] if len(parts) > 2 else None
+                print('Login successful!')
+
+                # Save encrypted token if salt was included
+                if salt_hex:
+                    salt = bytes.fromhex(salt_hex)
+                    crypto_utils.save_encrypted_credentials(
+                        session_token, password, salt)
+                else:
+                    print("Warning: salt not received — cannot save session securely.")
+            else:
+                error_msg = ' '.join(parts[1:]) if len(
+                    parts) > 1 else 'Invalid credentials.'
+                print('Login failed:', error_msg)
+        except Exception:
+            print('Could not connect to server. Please check your network and try again.')
+
+# ========== File Operations ==========
+
+
+def list_files() -> None:
+    """Retrieve and display list of shared files from peer."""
+    if not session_token:
+        print('Please log in to view shared files.')
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            send_command(s, 'LIST')
+            data = s.recv(8192).decode()
+            print('Shared files on server:')
+            print(data)
+        except Exception:
+            print('Failed to retrieve file list. Please try again later.')
+
+
+def upload_file() -> None:
+    """Encrypt, hash, and upload a file to the peer."""
+    if not session_token:
+        print('You must log in before uploading files.')
+        return
+    filepath = input("Enter file path to upload: ").strip()
+    if not os.path.isfile(filepath):
+        print('File not found. Please check the path and try again.')
+        return
+    filename = os.path.basename(filepath)
+    # Compute plaintext SHA-256 hash
+    plaintext_hash = crypto_utils.hash_file(filepath)
+    # Read entire file and encrypt
+    with open(filepath, 'rb') as f:
+        data = f.read()
+    if len(data) == 0:
+        print("Cannot upload an empty file.")
+        return
+
+    iv, ciphertext = crypto_utils.encrypt_bytes(data, SYMM_KEY)
+    enc_payload = iv + ciphertext
+    enc_size = len(enc_payload)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            send_command(s, 'UPLOAD')
+            resp = s.recv(1024).decode().strip()
+            if resp.startswith('ERROR'):
+                print(resp)
+                return
+            if resp != 'READY':
+                print('Server is not ready to receive files. Please try again later.')
+                return
+            # Send metadata: filename, encrypted size, plaintext hash
+            s.sendall(f"{filename}\n".encode())
+            s.sendall(f"{enc_size}\n".encode())
+            s.sendall(f"{plaintext_hash}\n".encode())
+            # Send encrypted payload in chunks
+            sent = 0
+            while sent < enc_size:
+                chunk = enc_payload[sent:sent + CHUNK_SIZE]
+                s.sendall(chunk)
+                sent += len(chunk)
+                print(
+                    f"[DEBUG] Sent {len(chunk)} bytes (total {sent}/{enc_size})")
+
+            result = s.recv(1024).decode().strip()
+            print(result)
+        except Exception:
+            print('Upload failed due to a network error. Please try again.')
+
+
+def download_file() -> None:
+    """Download, decrypt, and verify integrity of a file from the peer."""
+    if not session_token:
+        print('You must log in before downloading files.')
+        return
+    filename = input("Enter file name to download: ").strip()
+    dest = input("Save as: ").strip()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect((PEER_HOST, PEER_PORT))
+            send_command(s, 'DOWNLOAD')
+            resp = s.recv(1024).decode().strip()
+            if resp.startswith('ERROR'):
+                print(resp)
+                return
+            if resp != 'READY':
+                print('Server is not ready to send files. Please try again later.')
+                return
+            # Request the file
+            s.sendall(f"{filename}\n".encode())
+            # Use file-like wrapper for header lines
+            sock_file = s.makefile('rwb')
+            expected_hash = sock_file.readline().decode().strip()
+            size_str = sock_file.readline().decode().strip()
+            try:
+                total = int(size_str)
+            except ValueError:
+                print('Received invalid file size from server.')
+                return
+            # Acknowledge readiness
+            s.sendall(b'READY\n')
+            # Read encrypted payload
+            received = 0
+            buf = bytearray()
+            while received < total:
+                chunk = s.recv(min(CHUNK_SIZE, total - received))
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                received += len(chunk)
+            # Close the file wrapper
+            sock_file.close()
+            # Separate IV and ciphertext
+            iv = bytes(buf[:16])
+            ciphertext = bytes(buf[16:])
+            # Decrypt and verify
+            plaintext = crypto_utils.decrypt_bytes(iv, ciphertext, SYMM_KEY)
+            actual_hash = crypto_utils.hash_bytes(plaintext)
+            print(f"Expected hash: {expected_hash}")
+            print(f"Actual hash:   {actual_hash}")
+            if actual_hash != expected_hash:
+                print('Integrity check failed! File may be corrupted.')
+                return
+            # Write to disk
+            with open(dest, 'wb') as f:
+                f.write(plaintext)
+            print(f"Downloaded and verified {received} bytes successfully.")
+        except Exception:
+            print('Download failed due to a network error. Please try again.')
 
 
 if __name__ == '__main__':
