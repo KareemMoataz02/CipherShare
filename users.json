@@ -10,5 +10,9 @@
     "test": {
         "hashed_password": "142d341b105c2fedc2d0ccd19c2f7585cf60d06a97fb88e344c942f5a2d046e7",
         "salt": "8b4792ade02549482325803c999e24fd"
+    },
+    "Alice": {
+        "hashed_password": "dbe01d405333e767bcb1a928897ebc66f5d7dfdd93c52ed9b10fd2ecf5cc02d0",
+        "salt": "cf5c3da59e005614329de83a8ffc040f"
     }
 }
